@@ -14,12 +14,12 @@ uint8_t active_map[MAP_HEIGHT][MAP_WIDTH] =
 	{0x10,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x01},
 	{0x10,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x01},
 	{0x10,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x01},
-	{0x10,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x01},
-	{0x10,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x01},
-	{0x10,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x01},
-	{0x10,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x01},
-	{0x10,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x01},
-	{0x10,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x01},
+	{0x10,0x00,0x11,0x00,0x11,0x11,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x01},
+	{0x10,0x00,0x11,0x00,0x00,0x11,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x01},
+	{0x10,0x00,0x11,0x00,0x00,0x11,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x01},
+	{0x10,0x00,0x11,0x00,0x00,0x11,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x01},
+	{0x10,0x00,0x11,0x00,0x00,0x11,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x01},
+	{0x10,0x00,0x11,0x00,0x11,0x11,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x01},
 	{0x10,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x01},
 	{0x10,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x01},
 	{0x10,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x01},
@@ -38,7 +38,7 @@ typedef struct {
 
 PROGMEM const texture8x8 wall_1_texture_1 = {
 		8, 8,
-		{ 0xff, 0x81, 0x81, 0x81, 0x81, 0x81, 0x81, 0xff }
+		{ 0x00, 0x7e, 0x85, 0x04, 0x04, 0x85, 0x7e, 0x00 }
 };
 
 uint16_t frame_counter;
@@ -140,7 +140,7 @@ void app::run_frame(void) {
 #endif
 
 	const int8_t w = 84;
-	//const uint8_t h = 64; // should 126, but this is better for performance  //(w>>1)+w;
+	const uint8_t h = 48; // should 126, but this is better for performance  //(w>>1)+w;
 	const fixed camera_step_x = F_(1.0 / ((double)(w)));
 	fixed ray_dir_step_x = f32_imult(plane_x, camera_step_x);
 	fixed ray_dir_step_y = f32_imult(plane_y, camera_step_x);
@@ -285,13 +285,17 @@ void app::run_frame(void) {
 			perp_wall_dist = f32_imult(lat_dist, fract_dist_y);
 		}
 
-		int8_t line_height = f32_idiv(f1, perp_wall_dist)>>10;
+		uint8_t line_height = f32_idiv(f1, perp_wall_dist)>>10;
 		line_height -= (line_height>>2);
 
+		int16_t draw_texture_y_offset_steps = 0;
 		int8_t draw_start = (-line_height>>1) + 24;
-		if (draw_start < 0) draw_start = 0;
+		if (draw_start < 0) {
+			draw_texture_y_offset_steps = 0 - draw_start;
+			draw_start = 0;
+		}
 		int8_t draw_end = (line_height>>1) + 24;
-		if (draw_end >= w) draw_end = w-1;
+		if (draw_end >= h) draw_end = h-1;
 
 #ifdef DEBUG_PRINT
 		if (x < 2){
@@ -315,7 +319,6 @@ void app::run_frame(void) {
 
 		// base 22.9
 		// new method takes between 0.3ms and 2.4ms
-		// TODO: need to check correct presentation
 		/*uint8_t *p = buffer + (draw_start / 8) + (x * 6);
 		int8_t len = draw_end + (-draw_start) + 1;
 		int8_t pad = draw_start & 0x7;
@@ -358,14 +361,14 @@ void app::run_frame(void) {
 			fixed step_1 = f32_imult(perp_wall_dist, ray_dir_y);
 			wall_x = pos_y + step_1;
 
-			if (x < 1){
+			//if (x < 1){
 			//	PRINT_INLINE_VAR(step_1);
 			//	PRINT_INLINE_VAR(wall_x);
 			//	PRINT_INLINE_VAR(pos_y);
 			//	PRINT_INLINE_VAR(perp_wall_dist);
 			//	PRINT_INLINE_VAR(ray_dir_y);
 			//	Serial.println(F(""));
-			}
+			//}
 		}
 		else wall_x = pos_x + f32_imult(perp_wall_dist, ray_dir_x);
 
@@ -401,19 +404,70 @@ void app::run_frame(void) {
 			Serial.println(texture_x);
 		}
 		*/
+		/* draw_vrtical_Segment
+		 * (
+		 * 	wall type (8)
+		 * 	wall_start_y (8)
+		 * 	wall_end_y (8)
+		 * 	wall_text_start (16)
+		 * 	wall_test_step (16)
+		 * 	wall_x (8)
+		 * )
+		 */
+
+		int8_t ceil_draw_limit = draw_start;
+		uint8_t *p = buffer + (x * 6);
+		while (ceil_draw_limit >= 8) {
+			*p = 0xff;
+			p++;
+			ceil_draw_limit -= 8;
+		}
 
 		uint8_t texture = pgm_read_byte(&wall_1_texture_1.data[texture_x]);
-		int16_t texture_step_y = (((int16_t)wall_1_texture_1.h)<<8) / ((int16_t)line_height);
-		int16_t texture_cur_y = 0;
+		int16_t texture_step_y = (((int16_t)wall_1_texture_1.h)<<8) / ((int16_t)line_height+1);
+		//int16_t texture_cur_y = 0;
+		uint8_t scaled_texture;
 		uint8_t texture_sample_mask = 0x80;
 		uint8_t texture_sample = texture & texture_sample_mask;
-		uint8_t scaled_texture;
-		uint8_t i = 8;
-		int8_t line_drawn = line_height;
 
-		uint8_t *p = buffer + (draw_start / 8) + (x * 6);
-		int8_t off = draw_start & 0x7;
-		i -= off;
+		int8_t i = 8;
+		uint8_t line_drawn = draw_end + (-draw_start) + 1;
+		uint8_t floor_pattern_odd = x & 1;
+		uint8_t floor_pattern = ((draw_end+1) & 1) == floor_pattern_odd ? 0x80 : 0x0;
+
+		int16_t texture_cur_y = draw_texture_y_offset_steps * texture_step_y;
+		uint8_t texture_step = (texture_cur_y & 0xff00)>>8;
+		if (texture_step){
+
+			texture_sample_mask >>= texture_step;
+			texture_sample = texture & texture_sample_mask;
+			texture_cur_y &= 0x00ff;
+		}
+
+		//int16_t texture_step_y = (((int16_t)wall_1_texture_1.h)<<8) / ((int16_t)line_drawn);
+/*
+		if (x<2){
+			Serial.print(F("line_drawn: "));
+			Serial.print(line_drawn);
+			Serial.print(F("d raw_end+1: "));
+			Serial.print(draw_end+1);
+			Serial.print(F(" floor_pattern: "));
+			Serial.print(floor_pattern, HEX);
+			Serial.print(F(" floor_pattern_odd: "));
+			Serial.println(floor_pattern_odd);
+		}
+*/
+		//p = buffer + (draw_start / 8) + (x * 6);
+		//int8_t off = draw_start & 0x7;
+		//i -= off;
+		i -= ceil_draw_limit;
+		int8_t off = 0;
+		uint8_t floor_to_draw = h - draw_end;
+
+		while (ceil_draw_limit){
+			scaled_texture = (scaled_texture >> 1) + 0x80;
+			ceil_draw_limit--;
+		}
 
 #ifdef DEBUG_PRINT
 		if (x < 1){
@@ -434,38 +488,104 @@ void app::run_frame(void) {
 #endif
 
 		do {
-			scaled_texture = 0;
-			if (line_drawn - i < 0)
+			if (line_drawn - i < 0){
+				off = i - line_drawn;
 				i = line_drawn;
+				floor_to_draw -= off;
+			}
 			line_drawn -= i;
 
+			/* r20 = i, r21 = scaled texture, r22,r23 = texture cur y
+			 * r18 = sample mask, r19 = texture sample, r24,r25 = texture step y
+			 * r28 = texture
+			 *
+			 *	loop:
+			 *		lsr r21
+			 *		cpse r19,r1
+			 *		ori r21,0x80
+			 *		add r22,r24
+			 *		adc r23,r25
+			 *		breq skip
+			 *	move_texture_sample:
+			 *		lsl r18
+			 *		dec r23
+			 *		brne move_texture_sample
+			 *		mov r19,r28
+			 *		and r19,r18
+			 *	skip:
+			 * 		dec r20
+			 * 		brne loop
+			*/
+
+			// 10 (9) cycles, 14(13) cycles
 			while (i-- > 0){
-				scaled_texture = (scaled_texture << 1) + (texture_sample ? 1 : 0);
+				/*if (x<1){
+				Serial.print(F("texture_cur_y: "));
+				Serial.print(texture_cur_y);
+				Serial.println(F(""));
+				}*/
+				scaled_texture = (scaled_texture >> 1) + (texture_sample ? 0x80 : 0);
 				texture_cur_y += texture_step_y;
 
 				uint8_t texture_step = (texture_cur_y & 0xff00)>>8;
 				if (texture_step){
+					/*if (x<1){
+					Serial.print(F("texture_step: "));
+					Serial.print(texture_step);
+					Serial.println(F(""));
+					}*/
 					texture_sample_mask >>= texture_step;
 					texture_sample = texture & texture_sample_mask;
 					texture_cur_y &= 0x00ff;
-				}
+				}/*
 				if (x <1){
 					Serial.print(F(" tex: "));
 					Serial.print(scaled_texture);
-				}
+				}*/
 			}
-			if (x <1)
-				Serial.println(F(""));
-			if (off){
-				scaled_texture = scaled_texture << off;
-				off = 0;
+			//if (x <1)
+			//	Serial.println(F(""));
+			//if (off){
+			//	scaled_texture = scaled_texture >> off;
+			//	off = 0;
+			//}
+			while (off){
+			/*	if (x<2){
+					Serial.print(F("scaled_texture: "));
+					Serial.print(scaled_texture, HEX);
+					Serial.print(F(" floor_pattern: "));
+					Serial.print(floor_pattern, HEX);
+					Serial.print(F(" off: "));
+					Serial.println(off);
+				}*/
+				scaled_texture = (scaled_texture >> 1) + floor_pattern;
+				floor_pattern = 0x80 - floor_pattern;
+				off--;
 			}
 
 			*p = scaled_texture;
-
 			p++;
 			i = 8;
 		} while (line_drawn > 0);
+/*
+		if (x < 1){
+			Serial.print(F("ftod: "));
+			Serial.print(floor_to_draw);
+			Serial.print(F("ctod: "));
+			Serial.print(ceil_draw_limit);
+			Serial.print(F("draw_start: "));
+			Serial.print(draw_start);
+			Serial.print(F("draw_end: "));
+			Serial.println(draw_end);
+		}
+*/
+		//floor_pattern = floor_pattern_odd ? 0x55 : 0xAA;
+		floor_pattern = floor_pattern_odd ? 0xAA : 0x55;
+		while (floor_to_draw >= 8){
+			*p = floor_pattern;
+			p++;
+			floor_to_draw -= 8;
+		}
 
 		// Ready values for next loop iteration
 		//camera_x += camera_step_x;
@@ -499,7 +619,7 @@ void app::run_frame(void) {
 //	stop_timing_frame();
 	//Serial.println(F("==== Done ============================="));
 
-	//Serial.println(gb.frameDurationMicros);
+	Serial.println(gb.frameDurationMicros);
 
 }
 

@@ -37,24 +37,6 @@ fixed fsine(int8_t angle){
 	}
 
 	return result;
-	/*
-	int8_t i = abs(angle) & 0x3f;
-	fixed result;
-	if (angle == -128)
-		result = 0;
-	else if (angle < -64)
-		result = -sine_lookup_table[64 - i];
-	else if (angle == -64)
-		result = -f1;
-	else if (angle < 0)
-		result = -sine_lookup_table[i];
-	else if (angle < 63)
-		result = sine_lookup_table[i];
-	else if (angle == 64)
-		result = f1;
-	else
-		result = sine_lookup_table[64 - i];
-	return result;*/
 }
 
 fixed fcosine(int8_t angle){
