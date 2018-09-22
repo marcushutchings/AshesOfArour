@@ -99,7 +99,7 @@ clz_arg0_half_loop_init:
 clz_arg0_half_loop:
 	inc r30
 	lsl r26
-	brhc clz_arg0_half_loop 
+	brhc clz_arg0_half_loop
 	rjmp clz_arg1
 
 clz_arg0_loop:
@@ -263,4 +263,50 @@ divide_by_zero:
 	clr r24
 	ldi r25,0x80
 	rjmp finish
+
+
+
+
+
+
+
+
+	#r22,r23 = arg1 (y)
+	#r24,r25 = arg0 (x) (q)
+	#r19 = i
+	#r20,r21 = (r)
+	#r1 = 0
+.global div16
+div16:
+	ldi r19, 16
+	eor r20,r20
+	eor r21,r21
+
+div16_loop:
+	add r24,r24
+	adc r25,r25
+	adc r20,r20
+	adc r21,r21
+
+	cp r20,r22
+	cpc r21,r23
+	brlo div16_progress_values
+
+div16_add_to_quotiant:
+	sub r20,r22
+	sbc r21,r23
+	adiw r24, 1
+
+div16_progress_values:
+	dec r19
+	brne div16_loop
+
+div16_finish:
+	ret
+
+
+
+
+
+
 

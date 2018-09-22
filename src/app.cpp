@@ -5,6 +5,16 @@
 #include <avr/interrupt.h>
 #include <Gamebuino.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+extern uint8_t *get_display_buffer(void);
+extern void set_display_buffer(uint8_t *p);
+extern uint16_t draw_vertical(uint16_t, uint16_t, uint8_t);
+#ifdef __cplusplus
+}
+#endif
+
 #define MAP_WIDTH 14
 #define MAP_HEIGHT 14
 
@@ -116,6 +126,8 @@ fixed pos_y = 0x71000;
 
 //#define DEBUG_PRINT
 
+int first_run = 1;
+
 void app::run_frame(void) {
 	//if (lock) return;
 
@@ -125,7 +137,22 @@ void app::run_frame(void) {
 	fixed plane_x = fsine(angle-64);
 	fixed plane_y = fcosine(angle-64);
 
-	uint8_t* buffer = gb.display.getBuffer();
+	uint8_t* buffer = NULL;
+	// don't do this every frame!
+	if (first_run){
+	buffer = gb.display.getBuffer();
+	//Serial.print(F("buffer: "));
+	//Serial.println((uint16_t)buffer, HEX);
+	set_display_buffer(buffer);
+	//Serial.print(F("buffer: "));
+	//Serial.println((uint16_t)buffer, HEX);
+	first_run=0;
+	}
+
+	buffer = get_display_buffer();
+	//Serial.print((uint16_t)buffer, HEX);
+	//Serial.print(F(" "));
+	//return;
 
 #ifdef DEBUG_PRINT
 	Serial.print(F("angle: "));
@@ -285,16 +312,20 @@ void app::run_frame(void) {
 			perp_wall_dist = f32_imult(lat_dist, fract_dist_y);
 		}
 
-		uint8_t line_height = f32_idiv(f1, perp_wall_dist)>>10;
-		line_height -= (line_height>>2);
+
+		fixed real_wall_height = f32_idiv(f1, perp_wall_dist);
+		// convert wall height 0-1 to 0-64. +1 is to aid rounding
+		uint8_t line_height = ((real_wall_height>>9)+1)>>1;
+		// reduce 64 to 3/4 to a max of 48
+		line_height -= (((line_height>>1)+1)>>1);
 
 		int16_t draw_texture_y_offset_steps = 0;
-		int8_t draw_start = (-line_height>>1) + 24;
+		int8_t draw_start = (-((line_height+1)>>1)) + 24;
 		if (draw_start < 0) {
 			draw_texture_y_offset_steps = 0 - draw_start;
 			draw_start = 0;
 		}
-		int8_t draw_end = (line_height>>1) + 24;
+		int8_t draw_end = ((line_height+1)>>1) + 24;
 		if (draw_end >= h) draw_end = h-1;
 
 #ifdef DEBUG_PRINT
@@ -311,47 +342,6 @@ void app::run_frame(void) {
 		Serial.println(F("Done Draw"));
 		}
 #endif
-
-		// A wall filling the screen knocked frame-time to 53ms (about 32ms was this drawing)
-		// Typical frame need around 10ms for this drawing
-		//gb.display.drawFastVLine(x, draw_start, 1 + draw_end - draw_start);
-		//new Display::update code improves frame time by 0.3ms
-
-		// base 22.9
-		// new method takes between 0.3ms and 2.4ms
-		/*uint8_t *p = buffer + (draw_start / 8) + (x * 6);
-		int8_t len = draw_end + (-draw_start) + 1;
-		int8_t pad = draw_start & 0x7;
-		if (pad){
-			int8_t setbits = 8 - pad;
-			if (len >= setbits)	len -= setbits;
-			else {
-				setbits = len;
-				len = 0;
-			}
-			uint8_t v=1;
-			setbits--;
-			for (; setbits>0; setbits--)
-				v = (v<<1)+1;
-			for (; pad>0; pad--)
-				v <<= 1;
-			*p = v;
-			p++;
-		}
-		while (len > 0){
-			if (len < 8){
-				uint8_t v=1;
-				len--;
-				for (; len>0; len--)
-					v = (v<<1)+1;
-				*p = v;
-			}
-			else{
-				*p = 0xff;
-				p++;
-				len -= 8;
-			}
-		}*/
 
 		fixed wall_x;
 		if (side_hit == 0){
@@ -404,21 +394,31 @@ void app::run_frame(void) {
 			Serial.println(texture_x);
 		}
 		*/
-		/* draw_vrtical_Segment
-		 * (
-		 * 	wall type (8)
-		 * 	wall_start_y (8)
-		 * 	wall_end_y (8)
-		 * 	wall_text_start (16)
-		 * 	wall_test_step (16)
-		 * 	wall_x (8)
-		 * )
-		 */
 
 		int8_t ceil_draw_limit = draw_start;
 		uint8_t *p = buffer + (x * 6);
+
+		// --
+		uint16_t lineh = ((real_wall_height>>1)+1)>>1; // 32->16 with 1.0 * 64
+		lineh -= ((lineh>>1)+1)>>1; // divide by 3/4 for screen height
+		//lineh = line_height;
+		//lineh <<= 8;
+		//set_display_buffer(buffer);
+		uint16_t ret = draw_vertical(0, lineh, x);
+
+		if (x == 2){
+			uint16_t expected = ((uint16_t)draw_start) + (((uint16_t)draw_end)<<8);
+			Serial.print(F("input: "));
+			Serial.print((uint16_t)p, HEX);
+			Serial.print(F(" expected: "));
+			Serial.print(lineh);
+			Serial.print(F(" actual: "));
+			Serial.println(ret, HEX);
+		}
+		// --
+
 		while (ceil_draw_limit >= 8) {
-			*p = 0xff;
+			//*p = 0xff;
 			p++;
 			ceil_draw_limit -= 8;
 		}
@@ -443,6 +443,9 @@ void app::run_frame(void) {
 			texture_sample = texture & texture_sample_mask;
 			texture_cur_y &= 0x00ff;
 		}
+
+		// double sampling - TEMP
+		//texture_step_y = (texture_step_y + 1)>>1;
 
 		//int16_t texture_step_y = (((int16_t)wall_1_texture_1.h)<<8) / ((int16_t)line_drawn);
 /*
@@ -524,9 +527,13 @@ void app::run_frame(void) {
 				Serial.print(texture_cur_y);
 				Serial.println(F(""));
 				}*/
+				// TEMP - commented out to use double sampling instead
 				scaled_texture = (scaled_texture >> 1) + (texture_sample ? 0x80 : 0);
-				texture_cur_y += texture_step_y;
 
+				//uint8_t sample_1 = (texture_sample ? 0x80 : 0);
+				//uint8_t sample_1_y = texture_cur_y;
+
+				texture_cur_y += texture_step_y;
 				uint8_t texture_step = (texture_cur_y & 0xff00)>>8;
 				if (texture_step){
 					/*if (x<1){
@@ -537,7 +544,32 @@ void app::run_frame(void) {
 					texture_sample_mask >>= texture_step;
 					texture_sample = texture & texture_sample_mask;
 					texture_cur_y &= 0x00ff;
-				}/*
+				}
+/*
+				// TEMP - double sampling
+				uint8_t sample_2 = (texture_sample ? 0x80 : 0);
+				uint8_t sample_2_y = texture_cur_y;
+
+				if (sample_1 != sample_2){
+					//sample_1_y = sample_1_y > 0x80 ? sample_1_y - 0x80 : sample_1_y;
+					//sample_2_y = sample_2_y > 0x80 ? sample_2_y - 0x80 : sample_2_y;
+					if (sample_2_y < sample_1_y)
+						sample_1 = sample_2;
+				}
+
+				scaled_texture = (scaled_texture >> 1) + (sample_1 ? 0x80 : 0);
+
+				texture_cur_y += texture_step_y;
+				texture_step = (texture_cur_y & 0xff00)>>8;
+				if (texture_step){
+					texture_sample_mask >>= texture_step;
+					texture_sample = texture & texture_sample_mask;
+					texture_cur_y &= 0x00ff;
+				}
+*/
+				// TEMP - double sampling done
+
+				/*
 				if (x <1){
 					Serial.print(F(" tex: "));
 					Serial.print(scaled_texture);
@@ -619,7 +651,7 @@ void app::run_frame(void) {
 //	stop_timing_frame();
 	//Serial.println(F("==== Done ============================="));
 
-	Serial.println(gb.frameDurationMicros);
+	//Serial.println(gb.frameDurationMicros);
 
 }
 
