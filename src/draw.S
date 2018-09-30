@@ -187,6 +187,31 @@ next:
 	; draw ceiling
 
 
+
+			; r20 = i, r21 = scaled texture, r22,r23 = texture cur y
+			;* r18 = sample mask, r19 = texture sample, r24,r25 = texture step y
+			;* r28 = texture
+			;*
+			;*	loop:
+			; *		lsr r21
+			; *		cpse r19,r1
+			; *		ori r21,0x80
+			; *		add r22,r24
+			; *		adc r23,r25
+			; *		breq skip
+			; *	move_texture_sample:
+			; *		lsl r18
+			; *		dec r23
+			; *		brne move_texture_sample
+			; *		mov r19,r28
+			; *		and r19,r18
+			; *	skip:
+			; * 		dec r20
+			; * 		brne loop
+			;*/
+
+
+
 finish:
 	;eor r1,r1
 	pop r15

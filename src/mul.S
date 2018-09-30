@@ -133,3 +133,18 @@ f32_imult: # (66 cycles) +6 -1 [signed mult +5] (just counted 84 cycles)
 	# b1 x  x  x  x
 	# b2 x  x  x  x
 	# b3 x  x  x  x
+
+	; r22,r23 = arg1
+	; r24,r25 = arg0 -> r20,r21
+.global imul16
+imul16:
+	movw r20,r24
+	mul r20,r22
+	movw r24,r0
+	mulsu r23,r20
+	add r25,r1
+	mulsu r21,r22
+	add r25,r1
+	eor r1,r1
+	ret
+

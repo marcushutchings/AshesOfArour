@@ -11,6 +11,8 @@ extern "C" {
 extern uint8_t *get_display_buffer(void);
 extern void set_display_buffer(uint8_t *p);
 extern uint16_t draw_vertical(uint16_t, uint16_t, uint8_t);
+extern int16_t div16(int16_t,int16_t);
+//extern int16_t imul16(int16_t,int16_t);
 #ifdef __cplusplus
 }
 #endif
@@ -40,21 +42,50 @@ typedef struct {
 	uint8_t w, h;
 	uint8_t data[];
 } texture;
-
+// ==========================================================================================
+// spite rendering
 typedef struct {
 	uint8_t w, h;
-	uint8_t data[8];
+	uint8_t data[32];
 } texture8x8;
 
 PROGMEM const texture8x8 wall_1_texture_1 = {
-		8, 8,
-		{ 0x00, 0x7e, 0x85, 0x04, 0x04, 0x85, 0x7e, 0x00 }
+		16, 16,
+		{
+				0x00, 0x00,
+				0x7e, 0x7e,
+				0x85, 0x85,
+				0x04, 0x04,
+				0x04, 0x04,
+				0x85, 0x85,
+				0x7e, 0x7e,
+				0x00, 0x00,
+				0x00, 0x00,
+				0x7e, 0x7e,
+				0x85, 0x85,
+				0x04, 0x04,
+				0x04, 0x04,
+				0x85, 0x85,
+				0x7e, 0x7e,
+				0x00, 0x00,
+		}
 };
+
+static const int8_t w = 84;
+static const uint8_t h = 48;
+
+fixed zbuffer[w];
 
 uint16_t frame_counter;
 
 struct entity {
+	uint8_t typeId;
 	fixed_vec2d origin;
+	int16_t hp;
+	int8_t* initial_frame;
+	uint8_t size_radius;
+	void(*think)(entity*);
+	void(*touch)(entity*);
 };
 /*
 -I /opt/arduino/hardware/arduino/avr/cores/arduino
@@ -122,11 +153,150 @@ fixed dir_x = fsine(angle);
 fixed dir_y = fcosine(angle);
 fixed pos_x = F_(4);
 fixed pos_y = 0x71000;
+fixed plane_x = fsine(angle-64);
+fixed plane_y = fcosine(angle-64);
 //fixed velocity = 0;
 
 //#define DEBUG_PRINT
 
 int first_run = 1;
+
+static const int8_t max_ents = 10;
+static entity entity_list[max_ents];
+static int8_t active_entities = 0;
+
+void sort_list(fixed* dists, int8_t len, int8_t* order) {
+	for (int8_t i=1; i<len; i++){
+		for (int8_t j=0; j<i; j++){
+			if (dists[order[i]] < dists[order[j]]){
+				int8_t cur_value = order[i];
+				for (int8_t k=i;k>j;k--){
+					order[k] = order[k-1];
+				}
+				order[j] = cur_value;
+			}
+		}
+	}
+}
+/*
+	Serial.print(angle);
+	Serial.print(" ");
+	PRINT_INLINE_VAR(dir_x);
+	PRINT_INLINE_VAR(dir_y);
+	PRINT_INLINE_VAR(plane_x);
+	PRINT_INLINE_VAR(plane_y);
+	PRINT_INLINE_VAR(pos_x);
+	PRINT_INLINE_VAR(pos_y);
+	Serial.print("    ");
+	Serial.print("\r");
+*/
+void sprite_casting(void) {
+	fixed ent_dist[active_entities];
+	int8_t ent_order[active_entities];
+
+	uint8_t* buffer = gb.display.getBuffer();
+
+	for (int8_t i = 0; i<active_entities; i++){
+		ent_order[i] = i;
+		fixed distx = (pos_x - entity_list[i].origin.x);
+		distx = f32_imult(distx, distx);
+		fixed disty = (pos_y - entity_list[i].origin.y);
+		disty = f32_imult(disty, disty);
+		ent_dist[i] = distx + disty;
+	}
+
+	sort_list(ent_dist, active_entities, ent_order);
+
+	for (int8_t i = 0; i<active_entities; i++){
+		fixed x_off = entity_list[ent_order[i]].origin.x - pos_x;
+		fixed y_off = entity_list[ent_order[i]].origin.y - pos_y;
+
+		fixed inv_det = f32_idiv( f1, f32_imult(plane_x, dir_y) - f32_imult(plane_y, dir_x) );
+
+		fixed transform_y = f32_imult( inv_det, f32_imult(-plane_y, x_off) + f32_imult(plane_x, y_off) );
+		if (transform_y < 0) continue;
+		fixed transform_x = f32_imult( inv_det, f32_imult(dir_y, x_off) - f32_imult(dir_x, y_off) );
+
+		fixed inv_transform_y = f32_idiv( f1, transform_y );
+
+		fixed sprite_screen_x_f = f32_imult( (((fixed)(w>>1))<<16), (f1 + f32_imult(transform_x, inv_transform_y)) );
+		uint8_t sprite_x =  sprite_screen_x_f >> 16;
+
+		fixed sprite_screen_y_f = f32_imult( (((fixed)h)<<16), inv_transform_y);
+		uint8_t sprite_height = sprite_screen_y_f >> 16;
+		uint8_t sprite_width = sprite_height;
+
+		// set rate of change on y texture
+		uint16_t tex_step_y = div16(0x0800, sprite_screen_y_f>>8);
+		uint16_t tex_cur_y_start = 0;
+
+		uint8_t start_draw_y = (-(sprite_height>>1)) + 24;
+		if (start_draw_y < 0){
+			tex_cur_y_start = ((int16_t)(-start_draw_y))*tex_step_y;
+			start_draw_y = 0;
+		}
+		uint8_t end_draw_y = ((sprite_height-1)>>1) + 24;
+		if (end_draw_y >= h) end_draw_y = h-1;
+
+		// set rate of change on x texture
+		uint16_t tex_step_x = div16(0x0800, sprite_screen_x_f>>8);
+		uint16_t tex_cur_x = 0;
+
+		int8_t start_draw_x = (-(sprite_width>>1)) + sprite_x;
+		if (start_draw_x < 0){
+			tex_cur_x = ((int16_t)(-start_draw_x))*tex_step_x;
+			start_draw_x = 0;
+		}
+		int8_t end_draw_x = ((sprite_width-1)>>1) + sprite_x;
+		if (end_draw_x >= w) end_draw_x = w-1;
+/*
+		if (i==0){
+			Serial.print(start_draw_x);
+			Serial.print(" ");
+			Serial.print(end_draw_x);
+			Serial.print(" ");
+			Serial.print(start_draw_y);
+			Serial.print(" ");
+			Serial.print(end_draw_y);
+			Serial.print("\r");
+		}*/
+
+		uint8_t cur_texture;
+
+		for (uint8_t x = start_draw_x; x <= end_draw_x; x++){
+			if (tex_cur_x & 0xff00){/*
+				uint8_t texture_step = texture_cur_y >> 8;
+				texture_sample_mask >>= texture_step;
+				texture_sample = texture & texture_sample_mask;
+				texture_cur_y &= 0x00ff;*/
+			}
+
+			if (transform_y < zbuffer[x]){
+				uint8_t* pbuffer = &buffer[x*6];
+				pbuffer += start_draw_y >> 3;
+				uint16_t tex_cur_y = tex_cur_y_start;
+				uint8_t i = start_draw_y & 0xff;
+				uint8_t write_byte = 0xff;
+				if (i == 0)
+					i = 8;
+				int8_t y_draw_count = sprite_height;
+				while (y_draw_count){
+			//	for (uint8_t y = start_draw_y; y <= end_draw_y; y++){
+					if (y_draw_count - i < 0){
+						i = y_draw_count;
+					}
+					y_draw_count -= i;
+					for (; i > 0; i--){
+						write_byte = (write_byte << 1) + 0x1;
+					}
+					*pbuffer = write_byte;
+					i = 8;
+				}
+			}
+			tex_cur_x += tex_step_x;
+		}
+	}
+}
 
 void app::run_frame(void) {
 	//if (lock) return;
@@ -134,40 +304,24 @@ void app::run_frame(void) {
 	// use camera horizontal fov 90 deg for now, means 60 deg fov vertical
 	//fixed plane_x = F_(1.2); // FOV = 100.38
 	//fixed plane_z = F_(0.68571428571428571429); // FOV = 68.88
-	fixed plane_x = fsine(angle-64);
-	fixed plane_y = fcosine(angle-64);
+	plane_x = fsine(angle-64);
+	plane_y = fcosine(angle-64);
 
 	uint8_t* buffer = NULL;
+	buffer = gb.display.getBuffer();
 	// don't do this every frame!
 	if (first_run){
-	buffer = gb.display.getBuffer();
-	//Serial.print(F("buffer: "));
-	//Serial.println((uint16_t)buffer, HEX);
-	set_display_buffer(buffer);
-	//Serial.print(F("buffer: "));
-	//Serial.println((uint16_t)buffer, HEX);
-	first_run=0;
+		active_entities = 10;
+		entity_list[0].origin.x = 0x90000;
+		entity_list[0].origin.y = 0x90000;
+		entity_list[1].origin.x = 0x40000;
+		entity_list[1].origin.y = 0x50000;
+	//set_display_buffer(buffer);
+	//first_run=0;
 	}
 
-	buffer = get_display_buffer();
-	//Serial.print((uint16_t)buffer, HEX);
-	//Serial.print(F(" "));
-	//return;
+	//buffer = get_display_buffer();
 
-#ifdef DEBUG_PRINT
-	Serial.print(F("angle: "));
-	Serial.println(angle);
-	PRINT_VAR(pos_x);
-	PRINT_VAR(pos_y);
-	PRINT_VAR(dir_x);
-	PRINT_VAR(dir_y);
-	PRINT_VAR(plane_x);
-	PRINT_VAR(plane_y);
-	Serial.println(F("Done Dir"));
-#endif
-
-	const int8_t w = 84;
-	const uint8_t h = 48; // should 126, but this is better for performance  //(w>>1)+w;
 	const fixed camera_step_x = F_(1.0 / ((double)(w)));
 	fixed ray_dir_step_x = f32_imult(plane_x, camera_step_x);
 	fixed ray_dir_step_y = f32_imult(plane_y, camera_step_x);
@@ -193,22 +347,6 @@ void app::run_frame(void) {
 	Serial.print("    ");
 	Serial.print("\r");
 */
-#ifdef DEBUG_PRINT
-	PRINT_VAR(camera_step_x);
-	PRINT_VAR(ray_dir_step_x);
-	PRINT_VAR(ray_dir_step_y);
-	PRINT_VAR(map_x);
-	PRINT_VAR(map_y);
-	Serial.print(F("cur_map_x: "));
-	Serial.println(start_map_x);
-	Serial.print(F("cur_map_y: "));
-	Serial.println(start_map_y);
-	Serial.println(F("Done Camera"));
-#endif
-
-	#define shift_per_sq 6
-	#define units_per_sq (1<<shift_per_sq)
-
 	for (int8_t x = 0; x<w; x++)
 	{
 		fixed fract_dist_x = f32_idiv(f1, ray_dir_x);
@@ -235,7 +373,6 @@ void app::run_frame(void) {
 		else
 		{
 			step_x = 1;
-			//if (x==40) PRINT_VAR((map_x+f1-pos_x));
 			side_dist_x = f32_imult((map_x+f1-pos_x), delta_dist_x);
 		}
 		if (ray_dir_y < 0)
@@ -247,25 +384,8 @@ void app::run_frame(void) {
 		else
 		{
 			step_y = 1;
-			//if (x==40) PRINT_VAR((map_y+f1-pos_y));
 			side_dist_y = f32_imult((map_y+f1-pos_y), delta_dist_y);
 		}
-
-#ifdef DEBUG_PRINT
-		if (x<2){
-			PRINT_VAR(fract_dist_x);
-			PRINT_VAR(fract_dist_y);
-			PRINT_VAR(delta_dist_x);
-			PRINT_VAR(delta_dist_y);
-			PRINT_VAR(side_dist_x);
-			PRINT_VAR(side_dist_y);
-		Serial.print(F("step_x: "));
-		Serial.println(step_x);
-		Serial.print(F("step_y: "));
-		Serial.println(step_y);
-		Serial.println(F("Done Line Prep"));
-		}
-#endif
 
 		int8_t cur_map_x = start_map_x;
 		int8_t cur_map_y = start_map_y;
@@ -283,17 +403,6 @@ void app::run_frame(void) {
 				side_hit = 1;
 			}
 			hit = active_map[cur_map_y][cur_map_x];
-
-#ifdef DEBUG_PRINT
-			if (x<2){
-			Serial.print(F("map["));
-			Serial.print(cur_map_y);
-			Serial.print(F("]["));
-			Serial.print(cur_map_x);
-			Serial.print(F("] = "));
-			Serial.println(side_hit);
-			}
-#endif
 		}
 
 		fixed fcur_map_x = ((fixed)cur_map_x)<<16;
@@ -312,320 +421,129 @@ void app::run_frame(void) {
 			perp_wall_dist = f32_imult(lat_dist, fract_dist_y);
 		}
 
+		zbuffer[x] = perp_wall_dist;
 
 		fixed real_wall_height = f32_idiv(f1, perp_wall_dist);
 		// convert wall height 0-1 to 0-64. +1 is to aid rounding
-		uint8_t line_height = ((real_wall_height>>9)+1)>>1;
+		uint16_t tmp = real_wall_height>>8;
+		tmp >>= 2;
+		uint8_t line_height = tmp;
 		// reduce 64 to 3/4 to a max of 48
 		line_height -= (((line_height>>1)+1)>>1);
 
+		// ==========================================================================================
+		// environment rendering
+
 		int16_t draw_texture_y_offset_steps = 0;
-		int8_t draw_start = (-((line_height+1)>>1)) + 24;
+		int8_t draw_start = (-(line_height>>1)) + 24;
 		if (draw_start < 0) {
 			draw_texture_y_offset_steps = 0 - draw_start;
 			draw_start = 0;
 		}
-		int8_t draw_end = ((line_height+1)>>1) + 24;
+		int8_t draw_end = ((line_height-1)>>1) + 24;
 		if (draw_end >= h) draw_end = h-1;
-
-#ifdef DEBUG_PRINT
-		if (x < 2){
-			PRINT_VAR(fcur_map_x);
-			PRINT_VAR(fcur_map_y);
-			PRINT_VAR(perp_wall_dist);
-		Serial.print(F("line_height: "));
-		Serial.println(line_height);
-		Serial.print(F("draw_start: "));
-		Serial.println(draw_start);
-		Serial.print(F("draw_end: "));
-		Serial.println(draw_end);
-		Serial.println(F("Done Draw"));
-		}
-#endif
 
 		fixed wall_x;
 		if (side_hit == 0){
-
-			//wall_x = pos_y + f32_imult(perp_wall_dist, ray_dir_y);
-
 			fixed step_1 = f32_imult(perp_wall_dist, ray_dir_y);
 			wall_x = pos_y + step_1;
-
-			//if (x < 1){
-			//	PRINT_INLINE_VAR(step_1);
-			//	PRINT_INLINE_VAR(wall_x);
-			//	PRINT_INLINE_VAR(pos_y);
-			//	PRINT_INLINE_VAR(perp_wall_dist);
-			//	PRINT_INLINE_VAR(ray_dir_y);
-			//	Serial.println(F(""));
-			//}
 		}
 		else wall_x = pos_x + f32_imult(perp_wall_dist, ray_dir_x);
-
 		wall_x = wall_x & 0xffff;
-		//if (x < 1){
-		//	PRINT_INLINE_VAR(wall_x);
-		//}
-		//fixed step_1 = ((fixed)wall_1_texture_1.w)<<16;
-		//fixed step_2 = f32_imult(wall_x, step_1);
-		//int8_t texture_x = step_2 >> 16;
-		int8_t texture_x = (f32_imult(wall_x, ((fixed)wall_1_texture_1.w)<<16)>>16);
-	/*	if (x < 1){
-			PRINT_INLINE_VAR(step_1);
-			PRINT_INLINE_VAR(step_2);
-			PRINT_INLINE_VAR(wall_x);
-			Serial.print(F("tx: "));
-			Serial.println(texture_x);
-		}
-*/
+		int8_t texture_x = f32_imult(wall_x, 0x100000)>>16;
+		texture_x <<= 1;
 
-/*
-		if (x < 1){
-			Serial.print(F("side: "));
-			Serial.print(side_hit);
-			Serial.print(F(" "));
-			PRINT_INLINE_VAR(wall_x);
-			PRINT_INLINE_VAR(pos_x);
-			PRINT_INLINE_VAR(pos_y);
-			PRINT_INLINE_VAR(perp_wall_dist);
-			PRINT_INLINE_VAR(ray_dir_x);
-			PRINT_INLINE_VAR(ray_dir_y);
-			Serial.print(F("tx: "));
-			Serial.println(texture_x);
-		}
-		*/
-
-		int8_t ceil_draw_limit = draw_start;
 		uint8_t *p = buffer + (x * 6);
 
-		// --
-		uint16_t lineh = ((real_wall_height>>1)+1)>>1; // 32->16 with 1.0 * 64
-		lineh -= ((lineh>>1)+1)>>1; // divide by 3/4 for screen height
-		//lineh = line_height;
-		//lineh <<= 8;
-		//set_display_buffer(buffer);
-		uint16_t ret = draw_vertical(0, lineh, x);
-
-		if (x == 2){
-			uint16_t expected = ((uint16_t)draw_start) + (((uint16_t)draw_end)<<8);
-			Serial.print(F("input: "));
-			Serial.print((uint16_t)p, HEX);
-			Serial.print(F(" expected: "));
-			Serial.print(lineh);
-			Serial.print(F(" actual: "));
-			Serial.println(ret, HEX);
-		}
-		// --
-
+		int8_t ceil_draw_limit = draw_start;
 		while (ceil_draw_limit >= 8) {
-			//*p = 0xff;
+			*p = 0xff;
 			p++;
 			ceil_draw_limit -= 8;
 		}
+		uint8_t *wall_start_p = p;
 
 		uint8_t texture = pgm_read_byte(&wall_1_texture_1.data[texture_x]);
-		int16_t texture_step_y = (((int16_t)wall_1_texture_1.h)<<8) / ((int16_t)line_height+1);
-		//int16_t texture_cur_y = 0;
 		uint8_t scaled_texture;
 		uint8_t texture_sample_mask = 0x80;
 		uint8_t texture_sample = texture & texture_sample_mask;
 
 		int8_t i = 8;
 		uint8_t line_drawn = draw_end + (-draw_start) + 1;
+
+		int16_t top_half_height = 0x18 - draw_start;
+		int16_t texture_step_y_h = div16(0x0800, ((line_height)>>1));
+		int16_t texture_step_y_l = div16(0x0800, ((line_height+1)>>1));
+		int8_t top_draw_length = top_half_height;
+
+		int8_t floor_to_draw = h - draw_start;
 		uint8_t floor_pattern_odd = x & 1;
-		uint8_t floor_pattern = ((draw_end+1) & 1) == floor_pattern_odd ? 0x80 : 0x0;
+		uint8_t floor_pattern = floor_pattern_odd ? 0xAA : 0x55;
+		while (floor_to_draw >= 0){
+			*p = floor_pattern;
+			p++;
+			floor_to_draw -= 8;
+		}
 
+		int16_t texture_step_y = texture_step_y_h;
 		int16_t texture_cur_y = draw_texture_y_offset_steps * texture_step_y;
-		uint8_t texture_step = (texture_cur_y & 0xff00)>>8;
-		if (texture_step){
-
+		if (texture_cur_y & 0xff00){
+			uint8_t texture_step = texture_cur_y >> 8;
 			texture_sample_mask >>= texture_step;
 			texture_sample = texture & texture_sample_mask;
 			texture_cur_y &= 0x00ff;
 		}
 
-		// double sampling - TEMP
-		//texture_step_y = (texture_step_y + 1)>>1;
-
-		//int16_t texture_step_y = (((int16_t)wall_1_texture_1.h)<<8) / ((int16_t)line_drawn);
-/*
-		if (x<2){
-			Serial.print(F("line_drawn: "));
-			Serial.print(line_drawn);
-			Serial.print(F("d raw_end+1: "));
-			Serial.print(draw_end+1);
-			Serial.print(F(" floor_pattern: "));
-			Serial.print(floor_pattern, HEX);
-			Serial.print(F(" floor_pattern_odd: "));
-			Serial.println(floor_pattern_odd);
-		}
-*/
-		//p = buffer + (draw_start / 8) + (x * 6);
-		//int8_t off = draw_start & 0x7;
-		//i -= off;
 		i -= ceil_draw_limit;
-		int8_t off = 0;
-		uint8_t floor_to_draw = h - draw_end;
-
-		while (ceil_draw_limit){
-			scaled_texture = (scaled_texture >> 1) + 0x80;
-			ceil_draw_limit--;
-		}
-
-#ifdef DEBUG_PRINT
-		if (x < 1){
-			Serial.print(F("texture x: "));
-			Serial.println(texture_x);
-			Serial.print(F("texture pattern: "));
-			Serial.println(texture);
-			Serial.print(F("step_y: "));
-			Serial.println(texture_step_y);
-			Serial.print(F("offset: "));
-			Serial.println(off);
-			Serial.print(F("draw_start: "));
-			Serial.println(draw_start);
-			Serial.print(F("line_drawn: "));
-			Serial.println(line_drawn);
-			Serial.println(F("Done Draw"));
-		}
-#endif
-
+		scaled_texture = 0xff;
+		uint8_t floor_mask = 0xff;
+		uint8_t push_text = 0;
+		p = wall_start_p;
 		do {
 			if (line_drawn - i < 0){
-				off = i - line_drawn;
+				push_text = i - line_drawn;
 				i = line_drawn;
-				floor_to_draw -= off;
+				floor_mask <<= line_drawn;
 			}
 			line_drawn -= i;
 
-			/* r20 = i, r21 = scaled texture, r22,r23 = texture cur y
-			 * r18 = sample mask, r19 = texture sample, r24,r25 = texture step y
-			 * r28 = texture
-			 *
-			 *	loop:
-			 *		lsr r21
-			 *		cpse r19,r1
-			 *		ori r21,0x80
-			 *		add r22,r24
-			 *		adc r23,r25
-			 *		breq skip
-			 *	move_texture_sample:
-			 *		lsl r18
-			 *		dec r23
-			 *		brne move_texture_sample
-			 *		mov r19,r28
-			 *		and r19,r18
-			 *	skip:
-			 * 		dec r20
-			 * 		brne loop
-			*/
-
-			// 10 (9) cycles, 14(13) cycles
 			while (i-- > 0){
-				/*if (x<1){
-				Serial.print(F("texture_cur_y: "));
-				Serial.print(texture_cur_y);
-				Serial.println(F(""));
-				}*/
-				// TEMP - commented out to use double sampling instead
 				scaled_texture = (scaled_texture >> 1) + (texture_sample ? 0x80 : 0);
-
-				//uint8_t sample_1 = (texture_sample ? 0x80 : 0);
-				//uint8_t sample_1_y = texture_cur_y;
-
 				texture_cur_y += texture_step_y;
-				uint8_t texture_step = (texture_cur_y & 0xff00)>>8;
-				if (texture_step){
-					/*if (x<1){
-					Serial.print(F("texture_step: "));
-					Serial.print(texture_step);
-					Serial.println(F(""));
-					}*/
+				top_draw_length--;
+				if (top_draw_length==0){
+					texture_step_y = texture_step_y_l;
+					texture_cur_y=0;
+					texture_sample_mask = 0x80;
+					texture = pgm_read_byte(&wall_1_texture_1.data[texture_x+1]);
+					texture_sample = texture & texture_sample_mask;
+				}
+				else if (texture_cur_y & 0xff00){
+					uint8_t texture_step = texture_cur_y >> 8;
 					texture_sample_mask >>= texture_step;
 					texture_sample = texture & texture_sample_mask;
 					texture_cur_y &= 0x00ff;
 				}
-/*
-				// TEMP - double sampling
-				uint8_t sample_2 = (texture_sample ? 0x80 : 0);
-				uint8_t sample_2_y = texture_cur_y;
-
-				if (sample_1 != sample_2){
-					//sample_1_y = sample_1_y > 0x80 ? sample_1_y - 0x80 : sample_1_y;
-					//sample_2_y = sample_2_y > 0x80 ? sample_2_y - 0x80 : sample_2_y;
-					if (sample_2_y < sample_1_y)
-						sample_1 = sample_2;
-				}
-
-				scaled_texture = (scaled_texture >> 1) + (sample_1 ? 0x80 : 0);
-
-				texture_cur_y += texture_step_y;
-				texture_step = (texture_cur_y & 0xff00)>>8;
-				if (texture_step){
-					texture_sample_mask >>= texture_step;
-					texture_sample = texture & texture_sample_mask;
-					texture_cur_y &= 0x00ff;
-				}
-*/
-				// TEMP - double sampling done
-
-				/*
-				if (x <1){
-					Serial.print(F(" tex: "));
-					Serial.print(scaled_texture);
-				}*/
 			}
-			//if (x <1)
-			//	Serial.println(F(""));
-			//if (off){
-			//	scaled_texture = scaled_texture >> off;
-			//	off = 0;
-			//}
-			while (off){
-			/*	if (x<2){
-					Serial.print(F("scaled_texture: "));
-					Serial.print(scaled_texture, HEX);
-					Serial.print(F(" floor_pattern: "));
-					Serial.print(floor_pattern, HEX);
-					Serial.print(F(" off: "));
-					Serial.println(off);
-				}*/
-				scaled_texture = (scaled_texture >> 1) + floor_pattern;
-				floor_pattern = 0x80 - floor_pattern;
-				off--;
+
+			if (push_text){
+				scaled_texture >>= push_text;
+				uint8_t text_mask = ~floor_mask;
+				scaled_texture = (scaled_texture & text_mask) + (floor_pattern & floor_mask);
 			}
 
 			*p = scaled_texture;
 			p++;
 			i = 8;
 		} while (line_drawn > 0);
-/*
-		if (x < 1){
-			Serial.print(F("ftod: "));
-			Serial.print(floor_to_draw);
-			Serial.print(F("ctod: "));
-			Serial.print(ceil_draw_limit);
-			Serial.print(F("draw_start: "));
-			Serial.print(draw_start);
-			Serial.print(F("draw_end: "));
-			Serial.println(draw_end);
-		}
-*/
-		//floor_pattern = floor_pattern_odd ? 0x55 : 0xAA;
-		floor_pattern = floor_pattern_odd ? 0xAA : 0x55;
-		while (floor_to_draw >= 8){
-			*p = floor_pattern;
-			p++;
-			floor_to_draw -= 8;
-		}
 
 		// Ready values for next loop iteration
 		//camera_x += camera_step_x;
 		ray_dir_x += ray_dir_step_x;
 		ray_dir_y += ray_dir_step_y;
-
-//		break;
 	}
+
+	sprite_casting();
 
 	if (gb.buttons.pressed(BTN_LEFT) || gb.buttons.repeat(BTN_LEFT,1))
 		angle += 1;
@@ -651,7 +569,6 @@ void app::run_frame(void) {
 //	stop_timing_frame();
 	//Serial.println(F("==== Done ============================="));
 
-	//Serial.println(gb.frameDurationMicros);
-
+	Serial.println(gb.frameDurationMicros);
 }
 
